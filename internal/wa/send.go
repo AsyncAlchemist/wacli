@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
@@ -66,6 +67,30 @@ func (c *Client) SendReaction(ctx context.Context, chat, sender types.JID, targe
 		return "", err
 	}
 	return resp.ID, nil
+}
+
+// MarkRead sends WhatsApp read receipts for the given messages and reports the
+// receipt type that was actually sent. whatsmeow substitutes read-self for read
+// when this account's read-receipts privacy setting is off (and for
+// newsletters), in direct and group chats alike; a read-self receipt only syncs
+// to this account's own devices and never notifies the sender. The substitution
+// happens inside whatsmeow's MarkRead, which does not report it, so the same
+// rule is evaluated here (privacy settings are cached after the first fetch).
+func (c *Client) MarkRead(ctx context.Context, chat, sender types.JID, ids []types.MessageID) (types.ReceiptType, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return "", fmt.Errorf("not connected")
+	}
+	receipt := types.ReceiptTypeRead
+	if chat.Server == types.NewsletterServer || cli.GetPrivacySettings(ctx).ReadReceipts == types.PrivacySettingNone {
+		receipt = types.ReceiptTypeReadSelf
+	}
+	if err := cli.MarkRead(ctx, ids, time.Now(), chat, sender); err != nil {
+		return "", err
+	}
+	return receipt, nil
 }
 
 func (c *Client) RevokeMessage(ctx context.Context, chat types.JID, targetID types.MessageID) (types.MessageID, error) {
