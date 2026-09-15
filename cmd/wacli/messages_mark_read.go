@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -63,7 +64,7 @@ local store knows as sent by you are rejected.`,
 					if delegateErr != nil {
 						return delegateErr
 					}
-					return writeMarkReadOutput(flags, resp.Chat, resp.IDs, types.ReceiptType(resp.Receipt))
+					return writeMarkReadOutput(flags, os.Stdout, os.Stderr, resp.Chat, resp.IDs, types.ReceiptType(resp.Receipt))
 				}
 				return err
 			}
@@ -88,7 +89,7 @@ local store knows as sent by you are rejected.`,
 			if err != nil {
 				return err
 			}
-			return writeMarkReadOutput(flags, chatJID.String(), cleanIDs, receipt)
+			return writeMarkReadOutput(flags, os.Stdout, os.Stderr, chatJID.String(), cleanIDs, receipt)
 		},
 	}
 
@@ -123,10 +124,22 @@ func parseOptionalSender(sender string) (types.JID, error) {
 
 const readSelfHint = "read receipts are off in this account's WhatsApp privacy settings, so a read-self receipt was sent: the sender will not see blue ticks"
 
-func writeMarkReadOutput(flags *rootFlags, chat string, ids []string, receipt types.ReceiptType) error {
+// writeMarkReadOutput prints the command result. When the receipt was
+// read-self, the hint goes out as a "warning" NDJSON event under --events (so
+// the stderr stream stays machine-readable) and as a plain note otherwise.
+func writeMarkReadOutput(flags *rootFlags, stdout, stderr io.Writer, chat string, ids []string, receipt types.ReceiptType) error {
 	senderNotified := receipt == types.ReceiptTypeRead
+	if !senderNotified {
+		if flags.events {
+			_ = out.NewEventWriter(stderr, true).Emit("warning", map[string]any{
+				"code": "read_self_receipt", "message": readSelfHint, "chat": chat, "receipt": string(receipt),
+			})
+		} else if !flags.asJSON {
+			fmt.Fprintf(stderr, "Note: %s\n", readSelfHint)
+		}
+	}
 	if flags.asJSON {
-		return out.WriteJSON(os.Stdout, map[string]any{
+		return out.WriteJSON(stdout, map[string]any{
 			"sent":            true,
 			"chat":            chat,
 			"ids":             ids,
@@ -135,10 +148,9 @@ func writeMarkReadOutput(flags *rootFlags, chat string, ids []string, receipt ty
 		})
 	}
 	if senderNotified {
-		fmt.Fprintf(os.Stdout, "Marked %d message(s) as read in %s\n", len(ids), chat)
+		fmt.Fprintf(stdout, "Marked %d message(s) as read in %s\n", len(ids), chat)
 	} else {
-		fmt.Fprintf(os.Stdout, "Sent %s receipt(s) for %d message(s) in %s\n", receipt, len(ids), chat)
-		fmt.Fprintf(os.Stderr, "Note: %s\n", readSelfHint)
+		fmt.Fprintf(stdout, "Sent %s receipt(s) for %d message(s) in %s\n", receipt, len(ids), chat)
 	}
 	return nil
 }

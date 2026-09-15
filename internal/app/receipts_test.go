@@ -143,3 +143,49 @@ func TestMarkMessagesReadReportsReadSelfReceipt(t *testing.T) {
 		t.Fatalf("receipt = %q, want %q", receipt, types.ReceiptTypeReadSelf)
 	}
 }
+
+func TestMarkMessagesReadRejectsOwnMessageStoredUnderChatAlias(t *testing.T) {
+	pn := types.JID{User: "15551234567", Server: types.DefaultUserServer}
+	lid := types.JID{User: "99887766554433", Server: types.HiddenUserServer}
+	cases := []struct {
+		name   string
+		stored types.JID
+		chat   types.JID
+	}{
+		{name: "stored under phone number, chat given as LID", stored: pn, chat: lid},
+		{name: "stored under LID, chat given as phone number", stored: lid, chat: pn},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestApp(t)
+			f := newFakeWA()
+			f.lids[lid] = pn
+			a.wa = f
+			seedReceiptMessage(t, a, tc.stored, "MINE", "15550000000@s.whatsapp.net", true)
+
+			_, err := a.MarkMessagesRead(context.Background(), tc.chat, []string{"MINE"}, types.JID{})
+			if err == nil || !strings.Contains(err.Error(), "sent by you") {
+				t.Fatalf("error = %v, want own-message rejection through the chat alias", err)
+			}
+			if calls := markReadCalls(f); len(calls) != 0 {
+				t.Fatalf("MarkRead calls = %d, want none", len(calls))
+			}
+		})
+	}
+}
+
+func TestMarkMessagesReadPropagatesStoreErrors(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.wa = f
+	chat := types.JID{User: "15551234567", Server: types.DefaultUserServer}
+	a.db.Close()
+
+	_, err := a.MarkMessagesRead(context.Background(), chat, []string{"MSG1"}, types.JID{})
+	if err == nil || !strings.Contains(err.Error(), "look up message MSG1") {
+		t.Fatalf("error = %v, want the store error propagated", err)
+	}
+	if calls := markReadCalls(f); len(calls) != 0 {
+		t.Fatalf("MarkRead calls = %d, want none on a store failure", len(calls))
+	}
+}
